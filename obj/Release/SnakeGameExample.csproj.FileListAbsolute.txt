@@ -1,0 +1,11 @@
+C:\Users\1\source\repos\SnakeGameExample\bin\Release\SnakeGameExample.exe.config
+C:\Users\1\source\repos\SnakeGameExample\bin\Release\SnakeGameExample.exe
+C:\Users\1\source\repos\SnakeGameExample\bin\Release\SnakeGameExample.pdb
+C:\Users\1\source\repos\SnakeGameExample\obj\Release\SnakeGameExample.csproj.AssemblyReference.cache
+C:\Users\1\source\repos\SnakeGameExample\obj\Release\SnakeGameExample.csproj.SuggestedBindingRedirects.cache
+C:\Users\1\source\repos\SnakeGameExample\obj\Release\SnakeGameExample.FrmSnakeGame.resources
+C:\Users\1\source\repos\SnakeGameExample\obj\Release\SnakeGameExample.Properties.Resources.resources
+C:\Users\1\source\repos\SnakeGameExample\obj\Release\SnakeGameExample.csproj.GenerateResource.cache
+C:\Users\1\source\repos\SnakeGameExample\obj\Release\SnakeGameExample.csproj.CoreCompileInputs.cache
+C:\Users\1\source\repos\SnakeGameExample\obj\Release\SnakeGameExample.exe
+C:\Users\1\source\repos\SnakeGameExample\obj\Release\SnakeGameExample.pdb
