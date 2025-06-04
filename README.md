@@ -1,224 +1,185 @@
-yandex-jira-bot/
-├── cmd/
-│   └── main.go
-├── internal/
-│   ├── bot/
-│   │   └── handler.go
-│   ├── jira/
-│   │   └── client.go
-│   ├── storage/
-│   │   └── offset.go
-├── .env
-├── go.mod
-├── go.sum
-
-
-.env
-YANDEX_TOKEN=ваш_токен_бота
-JIRA_BASE_URL=https://your-domain.atlassian.net
-JIRA_USER=ваш_email@domain.com
-JIRA_API_TOKEN=ваш_jira_api_token
-JIRA_PROJECT_KEY=PRJ
-OFFSET_FILE=offset.txt
-
-internal/storage/offset.go
-package storage
+package main
 
 import (
-	"io/ioutil"
-	"os"
-	"strings"
-)
-
-func LoadOffset(file string) string {
-	data, err := ioutil.ReadFile(file)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
-}
-
-func SaveOffset(file, offset string) error {
-	return ioutil.WriteFile(file, []byte(offset), 0644)
-}
-
-
-internal/jira/client.gointernal/jira/client.go
-
-package jira
-
-import (
-	"fmt"
-	"os"
-
-	"github.com/go-resty/resty/v2"
-)
-
-type Client struct {
-	BaseURL string
-	User    string
-	Token   string
-	Project string
-}
-
-func NewClient() *Client {
-	return &Client{
-		BaseURL: os.Getenv("JIRA_BASE_URL"),
-		User:    os.Getenv("JIRA_USER"),
-		Token:   os.Getenv("JIRA_API_TOKEN"),
-		Project: os.Getenv("JIRA_PROJECT_KEY"),
-	}
-}
-
-func (c *Client) CreateIssue(summary string) error {
-	client := resty.New()
-
-	body := map[string]interface{}{
-		"fields": map[string]interface{}{
-			"project": map[string]string{
-				"key": c.Project,
-			},
-			"summary":     summary,
-			"description": "Создано ботом из Яндекс.Мессенджера",
-			"issuetype": map[string]string{
-				"name": "Task",
-			},
-		},
-	}
-
-	resp, err := client.R().
-		SetBasicAuth(c.User, c.Token).
-		SetHeader("Content-Type", "application/json").
-		SetBody(body).
-		Post(c.BaseURL + "/rest/api/3/issue")
-
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode() >= 300 {
-		return fmt.Errorf("Jira error: %s", resp.String())
-	}
-	return nil
-}
-
-internal/bot/handler.go
-
-
-package bot
-
-import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"strings"
 	"time"
-	"yandex-jira-bot/internal/jira"
-	"yandex-jira-bot/internal/storage"
-)
 
-type Message struct {
-	ConversationMessageID string `json:"conversation_message_id"`
-	Text                  string `json:"text"`
-	Sender                struct {
-		UserID string `json:"user_id"`
-	} `json:"sender"`
-}
-
-type Update struct {
-	Message Message `json:"message"`
-}
-
-func StartPolling() {
-	token := os.Getenv("YANDEX_TOKEN")
-	offsetFile := os.Getenv("OFFSET_FILE")
-	jiraClient := jira.NewClient()
-
-	offset := storage.LoadOffset(offsetFile)
-
-	for {
-		url := fmt.Sprintf("https://dialogs.yandex.net/api/v1/skills/%s/messages?offset=%s", token, offset)
-		resp, err := http.Get(url)
-		if err != nil {
-			log.Println("Ошибка получения обновлений:", err)
-			time.Sleep(3 * time.Second)
-			continue
-		}
-		defer resp.Body.Close()
-
-		var updates []Update
-		if err := json.NewDecoder(resp.Body).Decode(&updates); err != nil {
-			log.Println("Ошибка JSON:", err)
-			continue
-		}
-
-		for _, update := range updates {
-			offset = update.Message.ConversationMessageID
-			storage.SaveOffset(offsetFile, offset)
-			go handleMessage(update.Message, jiraClient)
-		}
-
-		time.Sleep(2 * time.Second)
-	}
-}
-
-func handleMessage(msg Message, client *jira.Client) {
-	text := strings.TrimSpace(msg.Text)
-
-	if strings.HasPrefix(text, "/jira") {
-		summary := strings.TrimSpace(strings.TrimPrefix(text, "/jira"))
-		if summary == "" {
-			log.Printf("[WARN] Пустая заявка от %s", msg.Sender.UserID)
-			return
-		}
-
-		err := client.CreateIssue(summary)
-		if err != nil {
-			log.Printf("[ERROR] Ошибка при создании заявки от %s: %v", msg.Sender.UserID, err)
-		} else {
-			log.Printf("[INFO] Успешно создана заявка от %s: %s", msg.Sender.UserID, summary)
-		}
-	}
-}
-
-
-cmd/main.go
-
-package main
-
-import (
-	"log"
-	"os"
-
+	"github.com/go-resty/resty/v2"
 	"github.com/joho/godotenv"
-	"yandex-jira-bot/internal/bot"
 )
+
+type YandexMessage struct {
+	UserID string `json:"user_id"`
+	Text   string `json:"text"`
+}
+
+type JiraIssue struct {
+	Fields JiraFields `json:"fields"`
+}
+
+type JiraFields struct {
+	Project     JiraProject        `json:"project"`
+	Summary     string             `json:"summary"`
+	Description string             `json:"description"`
+	IssueType   JiraIssueType      `json:"issuetype"`
+	Priority    JiraPriority       `json:"priority"`
+	Components  []JiraComponent    `json:"components"`
+	Customfield10103 string        `json:"customfield_10103"` // Metro Service
+	Customfield10702 string        `json:"customfield_10702"` // Issue Location
+	Customfield11010 string        `json:"customfield_11010"` // Metro Team
+}
+
+type JiraProject struct {
+	Key string `json:"key"`
+}
+
+type JiraIssueType struct {
+	Name string `json:"name"`
+}
+
+type JiraPriority struct {
+	ID string `json:"id"`
+}
+
+type JiraComponent struct {
+	Name string `json:"name"`
+}
 
 func main() {
 	err := godotenv.Load()
 	if err != nil {
-		log.Println("Файл .env не найден. Используются переменные окружения.")
+		log.Fatal("Error loading .env file")
 	}
 
-	required := []string{"YANDEX_TOKEN", "JIRA_BASE_URL", "JIRA_USER", "JIRA_API_TOKEN", "JIRA_PROJECT_KEY", "OFFSET_FILE"}
-	for _, key := range required {
-		if os.Getenv(key) == "" {
-			log.Fatalf("Переменная окружения %s обязательна", key)
+	yaToken := os.Getenv("YANDEX_TOKEN")
+	jiraUser := os.Getenv("JIRA_USER")
+	jiraToken := os.Getenv("JIRA_TOKEN")
+	jiraHost := os.Getenv("JIRA_HOST")
+
+	client := resty.New()
+
+	for {
+		resp, err := client.R().
+			SetHeader("Authorization", "OAuth "+yaToken).
+			Get("https://dialogs.yandex.net/api/v1/skills/YOUR_SKILL_ID/messages")
+
+		if err != nil {
+			log.Println("Polling error:", err)
+			continue
 		}
-	}
 
-	bot.StartPolling()
+		var messages []YandexMessage
+		_ = json.Unmarshal(resp.Body(), &messages)
+
+		for _, msg := range messages {
+			if strings.HasPrefix(msg.Text, "/jira") {
+				summary := strings.TrimPrefix(msg.Text, "/jira")
+				description := "Описание указано пользователем (здесь должно быть отдельное поле)"
+
+				issue := JiraIssue{
+					Fields: JiraFields{
+						Project: JiraProject{Key: "TEST"},
+						Summary: summary,
+						Description: description,
+						IssueType: JiraIssueType{Name: "Инцидент"},
+						Priority: JiraPriority{ID: "4"},
+						Components: []JiraComponent{{Name: "Service Desk IT Issues"}},
+						Customfield10103: "Service Management > First Line Support",
+						Customfield10702: "FLS",
+						Customfield11010: "Service Management. FLS",
+					},
+				}
+
+				_, err := client.R().
+					SetBasicAuth(jiraUser, jiraToken).
+					SetHeader("Content-Type", "application/json").
+					SetBody(issue).
+					Post(jiraHost + "/rest/api/2/issue")
+
+				if err != nil {
+					log.Println("Jira error:", err)
+				}
+			}
+		}
+
+		time.Sleep(3 * time.Second)
+	}
+}
+
+// Для вложений нужна отдельная функция загрузки файла
+func attachToJira(issueKey, filepath, jiraHost, jiraUser, jiraToken string) error {
+	file, err := os.Open(filepath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	var b bytes.Buffer
+	writer := multipart.NewWriter(&b)
+	part, _ := writer.CreateFormFile("file", filepath)
+	io.Copy(part, file)
+	writer.Close()
+
+	req, _ := http.NewRequest("POST", jiraHost+"/rest/api/2/issue/"+issueKey+"/attachments", &b)
+	req.SetBasicAuth(jiraUser, jiraToken)
+	req.Header.Set("X-Atlassian-Token", "no-check")
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("attach failed: %v", resp.Status)
+	}
+	return nil
 }
 
 
-go.mod
+📂 Что нужно тебе сделать, чтобы он реально работал на проде:
 
-module yandex-jira-bot
+Создай .env файл рядом с бинарником:
 
-go 1.20
+ini
+Copy
+Edit
+YANDEX_TOKEN=ya_oauth_...
+JIRA_USER=логин@domain.ru
+JIRA_TOKEN=Jira_API_Token
+JIRA_HOST=https://jira.example.com
+Вставь реальный YOUR_SKILL_ID в URL запроса в коде:
 
-require (
-	github.com/go-resty/resty/v2 v2.7.0
-	github.com/joho/godotenv v1.5.1
-)
+go
+Copy
+Edit
+Get("https://dialogs.yandex.net/api/v1/skills/YOUR_SKILL_ID/messages")
+Установи зависимости:
+
+bash
+Copy
+Edit
+go mod init yourmodulename
+go get github.com/go-resty/resty/v2
+go get github.com/joho/godotenv
+Собери и запусти:
+
+bash
+Copy
+Edit
+go run main.go
+💡 Хочешь, чтобы бот вел полноценный диалог (спросил тему, потом описание, потом вложение) — я могу расширить логику с диалоговым состоянием (FSM или простая map по user_id).
+
+📎 И, если нужно автоматически обрабатывать вложения от пользователя (фото и т.п.) — уточни, как именно ты хочешь их обрабатывать, и я это добавлю.
+
+
+
